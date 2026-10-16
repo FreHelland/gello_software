@@ -53,7 +53,7 @@ class Args:
     grip_margin: float = 0.1
     """While in contact the gripper is commanded this far past the wall so it keeps its grip."""
 
-    release_gap: float = 0.05
+    release_gap: float = 0.02
     """Open the trigger this far past the wall to release (0-1 scale)."""
 
     p_gain: int = 1000
@@ -119,6 +119,7 @@ def run(args: Args) -> None:
     wall = 0.0
     last_pos, t_last_move, t_last_close = -1, 0.0, 0.0
     source = ""
+    pushing = False
     last_cmd = -1.0
     print("running, Ctrl+C to stop")
     try:
@@ -160,11 +161,14 @@ def run(args: Args) -> None:
                 latched, wall = True, follower
                 source = "flag" if obj in CONTACT_STATES else "stall"
                 set_goal_deg(to_deg(wall))
-                set_current(args.wall_current)
             elif latched and (leader < wall - args.release_gap or follower > wall + 0.03):
                 # trigger opened past the wall, or the fingers moved on (object gone)
                 latched, rearm = False, False
-                set_current(0)
+            # one-sided wall: only push when the trigger is past the wall, never pull it closed
+            push = latched and leader >= wall
+            if push != pushing:
+                set_current(args.wall_current if push else 0)
+                pushing = push
             trigger_ma = read_present_current()
 
             rows.append(

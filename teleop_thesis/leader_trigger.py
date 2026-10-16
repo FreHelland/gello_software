@@ -128,6 +128,10 @@ def disable_spring() -> None:
     driver, mode = _state["driver"], _state["original_mode"]
     if driver is None:
         return
+    gains = _state.pop("original_gains", None)
+    if gains is not None:
+        set_p_gain(gains[0])
+        set_d_gain(gains[1])
     port, packet = driver._portHandler, driver._packetHandler
     with driver._lock:
         packet.write1ByteTxRx(port, GRIPPER_ID, ADDR_TORQUE_ENABLE, 0)
@@ -137,7 +141,8 @@ def disable_spring() -> None:
     print(f"trigger spring off, operating mode restored to {mode}")
 
 
-def install_spring(current_ma: int) -> None:
+def install_spring(current_ma: int, p_gain: int = 0, d_gain: int = 0) -> None:
+    """Turns the trigger motor on as soon as upstream has built the leader arm. Gains of 0 keep the motor's own."""
     original_init = DynamixelRobot.__init__
 
     def init_with_spring(self, *args, **kwargs):
@@ -148,5 +153,11 @@ def install_spring(current_ma: int) -> None:
             print("no real gripper motor found, trigger spring not enabled")
             return
         enable_spring(driver, current_ma)
+        _state["original_gains"] = (get_p_gain(), get_d_gain())
+        if p_gain > 0:
+            set_p_gain(p_gain)
+        if d_gain > 0:
+            set_d_gain(d_gain)
+        print(f"trigger gains P {get_p_gain()} D {get_d_gain()} (motor's own P {_state['original_gains'][0]} D {_state['original_gains'][1]})")
 
     DynamixelRobot.__init__ = init_with_spring
