@@ -21,9 +21,11 @@ from leader_config import GELLO_CONFIG, PORT
 from leader_trigger import (
     disable_spring,
     enable_spring,
+    get_d_gain,
     get_p_gain,
     read_present_current,
     set_current,
+    set_d_gain,
     set_goal_deg,
     set_p_gain,
 )
@@ -57,6 +59,15 @@ class Args:
     p_gain: int = 1000
     """Trigger motor position P gain while running (wall stiffness), 0 keeps the motor's own value."""
 
+    d_gain: int = 1000
+    """Trigger motor position D gain while running (wall damping), 0 keeps the motor's own value."""
+
+    stall_time: float = 0.15
+    """Fingers unchanged this long (s) while commanded further closed counts as contact."""
+
+    stall_gap: float = 0.03
+    """How far past the fingers the command must be for a stall to count as contact (0-1 scale)."""
+
     command_deadband: float = 0.01
     """Only send a new gripper command when it changes by more than this (0-1 scale)."""
 
@@ -68,6 +79,10 @@ class Args:
 
     outdir: str = "teleop_thesis/data"
     """Where the log is saved."""
+
+
+def stall_time_ok(still_for: float, stall_time: float) -> bool:
+    return still_for >= stall_time
 
 
 def run(args: Args) -> None:
@@ -86,7 +101,11 @@ def run(args: Args) -> None:
     original_p_gain = get_p_gain()
     if args.p_gain > 0:
         set_p_gain(args.p_gain)
+    original_d_gain = get_d_gain()
+    if args.d_gain > 0:
+        set_d_gain(args.d_gain)
     print(f"trigger position P gain: {get_p_gain()} (motor's own value {original_p_gain})")
+    print(f"trigger position D gain: {get_d_gain()} (motor's own value {original_d_gain})")
 
     gripper = RobotiqGripper()
     gripper.connect(hostname=args.robot_ip, port=args.gripper_port)
@@ -98,6 +117,8 @@ def run(args: Args) -> None:
     latched = False
     rearm = True
     wall = 0.0
+    last_pos, t_last_move, t_last_close = -1, 0.0, 0.0
+    source = ""
     last_cmd = -1.0
     print("running, Ctrl+C to stop")
     try:
@@ -116,11 +137,28 @@ def run(args: Args) -> None:
             gripper_ma = gripper._get_var("COU") * 10
             follower = pos / 255
 
-            if obj not in CONTACT_STATES:
+            now = time.time()
+            if pos != last_pos:
+                if pos > last_pos >= 0:
+                    t_last_close = now
+                last_pos, t_last_move = pos, now
+            # the gripper only raises its contact flag once the commands stop changing, so a stall is
+            # detected here as well: fingers were closing, have stopped, and are commanded further closed
+            stalled = (
+                stall_time_ok(now - t_last_move, args.stall_time)
+                # only right after the fingers were closing, not after opening or a long rest
+                and now - t_last_close < 1.0 + args.stall_time
+                and t_last_close >= t_last_move
+                and cmd - follower >= args.stall_gap
+            )
+            contact_now = obj in CONTACT_STATES or stalled
+
+            if not contact_now:
                 # the contact flag lags after a release, wait for it to clear before allowing a new contact
                 rearm = True
-            if not latched and rearm and obj in CONTACT_STATES:
+            if not latched and rearm and contact_now:
                 latched, wall = True, follower
+                source = "flag" if obj in CONTACT_STATES else "stall"
                 set_goal_deg(to_deg(wall))
                 set_current(args.wall_current)
             elif latched and (leader < wall - args.release_gap or follower > wall + 0.03):
@@ -132,7 +170,7 @@ def run(args: Args) -> None:
             rows.append(
                 (f"{t_start - t0:.4f}", f"{trigger_deg:.2f}", f"{leader:.4f}", f"{cmd:.4f}",
                  f"{follower:.4f}", obj, gripper_ma, int(latched), f"{wall:.4f}" if latched else "",
-                 args.wall_current if latched else 0, trigger_ma)
+                 args.wall_current if latched else 0, trigger_ma, source if latched else "")
             )
             print(f"\rleader {leader:5.3f}  gripper {follower:5.3f}  obj {obj}  wall {'ON ' if latched else 'off'}"
                   f"  trigger {trigger_ma:5d} mA   ", end="")
@@ -142,6 +180,7 @@ def run(args: Args) -> None:
     finally:
         try:
             set_p_gain(original_p_gain)
+            set_d_gain(original_d_gain)
             disable_spring()
         finally:
             driver.close()
@@ -156,6 +195,7 @@ def run(args: Args) -> None:
     with open(path, "w", newline="") as f:
         f.write(
             f"# speed={args.speed} force={args.force} wall_mA={args.wall_current} p_gain={args.p_gain or original_p_gain} "
+            f"d_gain={args.d_gain or original_d_gain} stall_time={args.stall_time} stall_gap={args.stall_gap} "
             f"grip_margin={args.grip_margin} "
             f"release_gap={args.release_gap} deadband={args.command_deadband} hz={args.hz} "
             f"open_deg={open_deg} closed_deg={closed_deg}\n"
@@ -163,7 +203,7 @@ def run(args: Args) -> None:
         writer = csv.writer(f)
         writer.writerow(["t_s", "trigger_deg", "leader_gripper", "gripper_cmd", "follower_gripper",
                          "gripper_object", "gripper_current_mA", "contact", "wall",
-                         "trigger_cap_mA", "trigger_current_mA"])
+                         "trigger_cap_mA", "trigger_current_mA", "contact_source"])
         writer.writerows(rows)
     print("saved to: ", path)
 

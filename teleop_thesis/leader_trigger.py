@@ -6,6 +6,7 @@ from leader_config import GELLO_CONFIG
 # Constants (XL330 control table)
 ADDR_OPERATING_MODE = 11
 ADDR_TORQUE_ENABLE = 64
+ADDR_POSITION_D_GAIN = 80
 ADDR_POSITION_P_GAIN = 84
 ADDR_GOAL_CURRENT = 102
 ADDR_GOAL_POSITION = 116
@@ -69,17 +70,15 @@ def set_goal_deg(deg: float) -> None:
         )
 
 
-def get_p_gain() -> int:
+def _get_gain(addr: int, name: str) -> int:
     driver = _state["driver"]
     with driver._lock:
-        value, res, err = driver._packetHandler.read2ByteTxRx(
-            driver._portHandler, GRIPPER_ID, ADDR_POSITION_P_GAIN
-        )
-    _check(res, err, "read position P gain")
+        value, res, err = driver._packetHandler.read2ByteTxRx(driver._portHandler, GRIPPER_ID, addr)
+    _check(res, err, f"read {name}")
     return value
 
 
-def set_p_gain(gain: int) -> None:
+def _set_gain(addr: int, name: str, gain: int) -> None:
     # RAM setting, it also resets to the motor's default on power cycle
     driver = _state["driver"]
     if driver is None:
@@ -87,11 +86,25 @@ def set_p_gain(gain: int) -> None:
     gain = int(min(max(gain, 0), 16383))
     with driver._lock:
         _check(
-            *driver._packetHandler.write2ByteTxRx(
-                driver._portHandler, GRIPPER_ID, ADDR_POSITION_P_GAIN, gain
-            ),
-            "set position P gain",
+            *driver._packetHandler.write2ByteTxRx(driver._portHandler, GRIPPER_ID, addr, gain),
+            f"set {name}",
         )
+
+
+def get_p_gain() -> int:
+    return _get_gain(ADDR_POSITION_P_GAIN, "position P gain")
+
+
+def set_p_gain(gain: int) -> None:
+    _set_gain(ADDR_POSITION_P_GAIN, "position P gain", gain)
+
+
+def get_d_gain() -> int:
+    return _get_gain(ADDR_POSITION_D_GAIN, "position D gain")
+
+
+def set_d_gain(gain: int) -> None:
+    _set_gain(ADDR_POSITION_D_GAIN, "position D gain", gain)
 
 
 def read_present_current() -> int:
