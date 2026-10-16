@@ -1,15 +1,13 @@
 """Registers this leader arm's calibration, then runs upstream run_env.py unchanged."""
 import runpy
-import numpy as np
-from gello.agents.gello_agent import PORT_CONFIG_MAP, DynamixelRobotConfig
+import sys
 
-PORT = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FTAK8B0I-if00-port0"
+from leader_config import register
 
-PORT_CONFIG_MAP[PORT] = DynamixelRobotConfig(
-    joint_ids=(1, 2, 3, 4, 5, 6),
-    joint_offsets=(0*np.pi/2, 0*np.pi/2, 2*np.pi/2, 2*np.pi/2, 2*np.pi/2, 0*np.pi/2),
-    joint_signs=(1, 1, -1, 1, 1, 1),
-    gripper_config=(7, 193, 147),
-)
 
+# default to the real leader arm, upstream's default agent is a dummy that reads all zeros
+if not any(a == "--agent" or a.startswith("--agent=") for a in sys.argv[1:]):
+    sys.argv.append("--agent=gello")
+
+register()
 runpy.run_path("experiments/run_env.py", run_name="__main__")
